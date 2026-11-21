@@ -6,7 +6,6 @@ import {
   ShieldCheck,
   XCircle,
   ExternalLink,
-  Trash2,
   FileDown,
   FileText,
   Eye,
@@ -32,6 +31,18 @@ function formatDate(iso: string): string {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+  });
+}
+
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   });
 }
 
@@ -63,15 +74,14 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [feedbackInput, setFeedbackInput] = useState('');
   const [processingAction, setProcessingAction] = useState<
-    'approve' | 'reject' | 'delete' | null
+    'approve' | 'reject' | null
   >(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [adminSection, setAdminSection] = useState<'letters' | 'proposals'>('letters');
   const [proposals, setProposals] = useState<ProposalSubmission[]>([]);
   const [proposalsLoading, setProposalsLoading] = useState(true);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [proposalActionId, setProposalActionId] = useState<string | null>(null);
-  const [proposalAction, setProposalAction] = useState<'download' | 'preview' | 'delete' | null>(null);
+  const [proposalAction, setProposalAction] = useState<'download' | 'preview' | null>(null);
   const [proposalPreview, setProposalPreview] = useState<{
     url: string;
     fileName: string;
@@ -214,37 +224,6 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
     }
   }
 
-  async function handleDeleteRecord() {
-    if (!selectedItem) return;
-    if (
-      !window.confirm(
-        `Permanently delete ${selectedItem.letterRef} from both the organization and CESSCA records? This cannot be undone.`
-      )
-    ) {
-      return;
-    }
-
-    setActionError(null);
-    setProcessingAction('delete');
-    try {
-      const res = await fetch(`/api/cessca/queue/${encodeURIComponent(selectedItem.id)}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to delete the record.');
-      }
-      setItems((current) => current.filter((item) => item.id !== selectedItem.id));
-      setSelectedId(null);
-      notifyPortalDataChanged();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to delete the record.');
-    } finally {
-      setProcessingAction(null);
-    }
-  }
-
   async function fetchProposalFile(proposal: ProposalSubmission): Promise<Blob> {
     const response = await fetch(
       `/api/cessca/proposals/${encodeURIComponent(proposal.id)}/file`,
@@ -303,31 +282,6 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
     }
   }
 
-  async function handleDeleteProposal(proposal: ProposalSubmission) {
-    if (!window.confirm(`Permanently delete "${proposal.fileName}" and its proposal record? This cannot be undone.`)) {
-      return;
-    }
-    setProposalActionId(proposal.id);
-    setProposalAction('delete');
-    setProposalError(null);
-    try {
-      const response = await fetch(`/api/cessca/proposals/${encodeURIComponent(proposal.id)}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Unable to delete proposal file.');
-      }
-      setProposals((current) => current.filter((item) => item.id !== proposal.id));
-      notifyPortalDataChanged();
-    } catch (error) {
-      setProposalError(error instanceof Error ? error.message : 'Unable to delete proposal file.');
-    } finally {
-      setProposalActionId(null);
-      setProposalAction(null);
-    }
-  }
 
   if (user?.role !== 'cessca') {
     return (
@@ -341,7 +295,7 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
           </h1>
           <p className="text-sm text-stone-600 max-w-md mx-auto">
             This administration console is restricted to CESSCA administrators managing proposal
-            files and legacy announcement requests.
+            files and letter submissions.
           </p>
           <button
             type="button"
@@ -351,171 +305,6 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
             Sign In as CESSCA Admin
           </button>
         </div>
-      </main>
-    );
-  }
-
-  if (adminSection === 'proposals') {
-    return (
-      <main className="portal-page-enter mx-auto max-w-7xl space-y-4 px-3 py-4 sm:px-6 sm:py-6">
-        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-          <div>
-            <div className="text-xs font-medium uppercase tracking-widest text-emerald-100">
-              CESSCA Super Administrator
-            </div>
-            <h1 className="mt-1 font-display text-2xl font-semibold text-white sm:text-3xl">
-              Proposal File Submissions
-            </h1>
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setAdminSection('letters')}
-              className="rounded-lg bg-stone-100 px-3.5 py-2 text-xs font-medium text-stone-700 transition hover:bg-stone-200"
-            >
-              Legacy Announcement Queue
-            </button>
-            <button
-              type="button"
-              onClick={() => setAdminSection('proposals')}
-              className="rounded-lg bg-emerald-800 px-3.5 py-2 text-xs font-medium text-white"
-            >
-              Proposal Files ({proposals.length})
-            </button>
-          </div>
-        </div>
-
-        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-relaxed text-emerald-950">
-          Files remain private to CESSCA administrators. PDFs and common image files can be previewed
-          here; other file types can still be downloaded.
-        </p>
-
-        {proposalError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-            {proposalError}
-          </div>
-        )}
-
-        <section className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-          {proposalsLoading ? (
-            <div className="p-8 text-sm text-stone-500">Loading proposal submissions...</div>
-          ) : proposals.length === 0 ? (
-            <div className="p-10 text-center">
-              <FileText className="mx-auto h-8 w-8 text-stone-400" />
-              <p className="mt-3 text-sm font-medium text-stone-900">No proposal files submitted yet.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-stone-100">
-              {proposals.map((proposal) => (
-                <article key={proposal.id} className="space-y-3 p-4 sm:p-5">
-                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
-                    <div className="min-w-0 space-y-1">
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800">
-                        {proposal.orgShortName} · {formatDate(proposal.submittedAt)}
-                      </div>
-                      <h2 className="text-base font-semibold text-stone-900">{proposal.title}</h2>
-                      <p className="text-xs text-stone-600">
-                        {proposal.orgFullName} · Submitted by {proposal.presidentName}
-                      </p>
-                      {proposal.message && (
-                        <p className="whitespace-pre-line pt-1 text-sm leading-relaxed text-stone-700">
-                          {proposal.message}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 gap-2">
-                      {isPreviewableProposal(proposal) && (
-                        <button
-                          type="button"
-                          disabled={proposalActionId !== null}
-                          onClick={() => void handleProposalPreview(proposal)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-800 transition hover:bg-emerald-50 disabled:opacity-50"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                          {proposalActionId === proposal.id && proposalAction === 'preview'
-                            ? 'Opening...'
-                            : 'Preview'}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={proposalActionId !== null}
-                        onClick={() => void handleProposalDownload(proposal)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-medium text-white transition hover:bg-emerald-900 disabled:opacity-50"
-                      >
-                        <FileDown className="h-3.5 w-3.5" />
-                        {proposalActionId === proposal.id && proposalAction === 'download'
-                          ? 'Working...'
-                          : 'Download'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={proposalActionId !== null}
-                        onClick={() => void handleDeleteProposal(proposal)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 transition hover:bg-red-50 disabled:opacity-50"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        {proposalActionId === proposal.id && proposalAction === 'delete'
-                          ? 'Deleting...'
-                          : 'Delete'}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">
-                    <FileText className="h-4 w-4 shrink-0 text-emerald-800" />
-                    <span className="max-w-full break-all font-medium text-stone-800">{proposal.fileName}</span>
-                    <span>{formatFileSize(proposal.fileSize)}</span>
-                    <span>{proposal.contentType}</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {proposalPreview && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 sm:p-6"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Preview ${proposalPreview.fileName}`}
-            onClick={() => setProposalPreview(null)}
-          >
-            <div
-              className="flex h-[min(92vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="flex items-center justify-between gap-3 border-b border-stone-200 px-4 py-3">
-                <div className="min-w-0">
-                  <h2 className="text-sm font-semibold text-stone-900">File preview</h2>
-                  <p className="break-all text-xs text-stone-600">{proposalPreview.fileName}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setProposalPreview(null)}
-                  className="shrink-0 rounded-lg border border-stone-300 px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-50"
-                >
-                  Close
-                </button>
-              </div>
-              <div className="min-h-0 flex-1 bg-stone-100 p-2 sm:p-4">
-                {proposalPreview.contentType === 'application/pdf' ? (
-                  <iframe
-                    src={proposalPreview.url}
-                    title={`Preview of ${proposalPreview.fileName}`}
-                    className="h-full w-full rounded border border-stone-300 bg-white"
-                  />
-                ) : (
-                  <img
-                    src={proposalPreview.url}
-                    alt={proposalPreview.fileName}
-                    className="h-full w-full object-contain"
-                  />
-                )}
-              </div>
-            </div>
-          </div>
-        )}
       </main>
     );
   }
@@ -530,7 +319,7 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
             Super Administrator Console
           </div>
           <h1 className="mt-1 font-display text-2xl font-semibold text-white sm:text-3xl">
-            Legacy Announcement Queue
+            CESSCA Submissions
           </h1>
         </div>
 
@@ -546,22 +335,73 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
         </div>
       </div>
 
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => setAdminSection('letters')}
-          className="rounded-lg bg-emerald-800 px-3.5 py-2 text-xs font-medium text-white"
-        >
-          Legacy Announcement Queue
-        </button>
-        <button
-          type="button"
-          onClick={() => setAdminSection('proposals')}
-          className="rounded-lg bg-stone-100 px-3.5 py-2 text-xs font-medium text-stone-700 transition hover:bg-stone-200"
-        >
-          Proposal Files ({proposals.length})
-        </button>
-      </div>
+      {proposalError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {proposalError}
+        </div>
+      )}
+
+      <section className="overflow-hidden rounded-xl border border-stone-200 bg-white">
+        <div className="flex items-center justify-between border-b border-stone-200 px-4 py-3">
+          <h2 className="text-sm font-semibold text-stone-900">Proposal Files</h2>
+          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">
+            {proposals.length}
+          </span>
+        </div>
+        {proposalsLoading ? (
+          <div className="p-6 text-sm text-stone-500">Loading proposal submissions...</div>
+        ) : proposals.length === 0 ? (
+          <div className="p-6 text-center text-sm text-stone-500">No proposal files submitted.</div>
+        ) : (
+          <div className="divide-y divide-stone-100">
+            {proposals.map((proposal) => (
+              <article key={proposal.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800">
+                    {proposal.orgShortName} · {formatDate(proposal.submittedAt)}
+                  </div>
+                  <h3 className="mt-1 text-sm font-semibold text-stone-900">{proposal.title}</h3>
+                  <p className="mt-0.5 text-xs text-stone-600">
+                    {proposal.orgFullName} · Submitted by {proposal.presidentName}
+                  </p>
+                  {proposal.message && (
+                    <p className="mt-2 whitespace-pre-line text-xs leading-relaxed text-stone-700">
+                      {proposal.message}
+                    </p>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-stone-600">
+                    <FileText className="h-4 w-4 text-emerald-800" />
+                    <span className="break-all font-medium text-stone-800">{proposal.fileName}</span>
+                    <span>{formatFileSize(proposal.fileSize)}</span>
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  {isPreviewableProposal(proposal) && (
+                    <button
+                      type="button"
+                      disabled={proposalActionId !== null}
+                      onClick={() => void handleProposalPreview(proposal)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      {proposalActionId === proposal.id && proposalAction === 'preview' ? 'Opening...' : 'Preview'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={proposalActionId !== null}
+                    onClick={() => void handleProposalDownload(proposal)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-900 disabled:opacity-50"
+                  >
+                    <FileDown className="h-3.5 w-3.5" />
+                    {proposalActionId === proposal.id && proposalAction === 'download' ? 'Working...' : 'Download'}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Summary KPI Strip */}
       <div className="portal-stagger grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
@@ -572,13 +412,13 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
           </div>
         </div>
         <div className="rounded-xl border border-stone-200 bg-white p-2.5 sm:p-3">
-          <div className="text-[11px] text-stone-500 sm:text-xs">Approved & Published</div>
+          <div className="text-[11px] text-stone-500 sm:text-xs">Approved</div>
           <div className="mt-1 font-mono text-xl font-semibold text-emerald-700 tabular-nums sm:text-2xl">
             {counts.approved}
           </div>
         </div>
         <div className="rounded-xl border border-stone-200 bg-white p-2.5 sm:p-3">
-          <div className="text-[11px] text-stone-500 sm:text-xs">Rejected with Feedback</div>
+          <div className="text-[11px] text-stone-500 sm:text-xs">Rejected</div>
           <div className="mt-1 font-mono text-xl font-semibold text-red-700 tabular-nums sm:text-2xl">
             {counts.rejected}
           </div>
@@ -616,7 +456,11 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
         ))}
       </div>
 
-      {/* Moderation Table + Split Inspector */}
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-white">Letter Submissions</h2>
+      </section>
+
+      {/* Letter Table + Split Inspector */}
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
         <div className="lg:col-span-7 bg-white border border-stone-200 rounded-xl overflow-hidden">
           {loading ? (
@@ -766,20 +610,40 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
               )}
 
               <div className="space-y-2 pt-2 border-t border-stone-200">
-                <label
-                  htmlFor="cessca-feedback"
-                  className="block text-xs font-medium text-stone-700"
-                >
-                  CESSCA Review Remarks (required when rejecting)
-                </label>
-                <textarea
-                  id="cessca-feedback"
-                  rows={2}
-                  value={feedbackInput}
-                  onChange={(e) => setFeedbackInput(e.target.value)}
-                  placeholder="Optional approval note or mandatory revision reason..."
-                  className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#166534]/20 focus:border-[#166534]"
-                />
+                {selectedItem.status === 'pending' ? (
+                  <>
+                    <label
+                      htmlFor="cessca-feedback"
+                      className="block text-xs font-medium text-stone-700"
+                    >
+                      CESSCA Review Remarks (required when rejecting)
+                    </label>
+                    <textarea
+                      id="cessca-feedback"
+                      rows={2}
+                      value={feedbackInput}
+                      onChange={(e) => setFeedbackInput(e.target.value)}
+                      placeholder="Optional approval note or mandatory revision reason..."
+                      className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#166534]/20 focus:border-[#166534]"
+                    />
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-stone-500">
+                      Review Remarks
+                    </div>
+                    <p className="text-sm leading-relaxed text-stone-800">
+                      {selectedItem.feedback || 'No remarks were added.'}
+                    </p>
+                    {selectedItem.reviewedAt && (
+                      <p className="mt-2 text-xs text-stone-500">
+                        {selectedItem.status === 'approved' ? 'Approved' : 'Rejected'} on{' '}
+                        {formatDateTime(selectedItem.reviewedAt)}
+                        {selectedItem.reviewedBy ? ` by ${selectedItem.reviewedBy}` : ''}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {actionError && (
@@ -790,18 +654,9 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
 
               <div
                 className={`grid gap-3 pt-1 ${
-                  selectedItem.status === 'pending' ? 'grid-cols-3' : 'grid-cols-1'
+                  selectedItem.status === 'pending' ? 'grid-cols-2' : 'grid-cols-1'
                 }`}
               >
-                <button
-                  type="button"
-                  disabled={processingAction !== null}
-                  onClick={() => void handleDeleteRecord()}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50 cursor-pointer"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  <span>{processingAction === 'delete' ? 'Deleting...' : 'Delete Record'}</span>
-                </button>
                 {selectedItem.status === 'pending' && (
                   <>
                     <button
@@ -822,7 +677,7 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
                     >
                       <CheckCircle2 className="w-4 h-4" />
                       <span>
-                        {processingAction === 'approve' ? 'Publishing...' : 'Approve & Publish'}
+                        {processingAction === 'approve' ? 'Approving...' : 'Approve'}
                       </span>
                     </button>
                   </>
@@ -832,6 +687,49 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
           )}
         </aside>
       </div>
+      {proposalPreview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Preview ${proposalPreview.fileName}`}
+          onClick={() => setProposalPreview(null)}
+        >
+          <div
+            className="flex h-[min(92vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-stone-200 px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-stone-900">File preview</h2>
+                <p className="break-all text-xs text-stone-600">{proposalPreview.fileName}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProposalPreview(null)}
+                className="shrink-0 rounded-lg border border-stone-300 px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-50"
+              >
+                Close
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 bg-stone-100 p-2 sm:p-4">
+              {proposalPreview.contentType === 'application/pdf' ? (
+                <iframe
+                  src={proposalPreview.url}
+                  title={`Preview of ${proposalPreview.fileName}`}
+                  className="h-full w-full rounded border border-stone-300 bg-white"
+                />
+              ) : (
+                <img
+                  src={proposalPreview.url}
+                  alt={proposalPreview.fileName}
+                  className="h-full w-full object-contain"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

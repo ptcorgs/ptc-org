@@ -55,8 +55,8 @@ export function WorkflowGuideModal({ isOpen, onClose }: WorkflowGuideModalProps)
               <ShieldCheck className="w-5 h-5 text-[#166534]" />
               <h3 className="font-semibold text-stone-900">3. CESSCA Admin</h3>
               <p className="text-xs text-stone-600 leading-relaxed">
-                Inspects incoming letters and media across all 12 organizations, then approves to
-                publish or rejects with feedback.
+                Reviews proposal files and letter submissions across all 12 organizations. Organization
+                posts publish directly to their own pages.
               </p>
             </div>
           </div>
