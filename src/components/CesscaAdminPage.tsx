@@ -24,6 +24,27 @@ interface CesscaAdminPageProps {
 
 type QueueFilter = 'all' | PostStatus;
 
+interface AdminSubmission {
+  key: string;
+  id: string;
+  kind: 'letter' | 'proposal';
+  letterRef: string | null;
+  orgCode: string;
+  orgShortName: string;
+  orgFullName: string;
+  presidentName: string;
+  title: string;
+  eventDate: string | null;
+  caption: string;
+  imageUrl: string | null;
+  status: PostStatus;
+  feedback: string | null;
+  submittedAt: string;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  proposal?: ProposalSubmission;
+}
+
 function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -106,12 +127,12 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
         const data = await res.json();
         const nextItems = (data.items ?? []) as SubmissionQueueItem[];
         setItems(nextItems);
-        setSelectedId((prev) => {
-          if (prev && nextItems.some((item) => item.id === prev)) return prev;
-          const firstPending = nextItems.find((i) => i.status === 'pending');
-          return firstPending?.id ?? nextItems[0]?.id ?? null;
-        });
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to load letter submissions.');
       }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to load submissions.');
     } finally {
       setLoading(false);
     }
@@ -149,55 +170,99 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
     void loadProposals();
   }, [loadProposals]);
 
+  const submissions = useMemo<AdminSubmission[]>(() => {
+    const letterSubmissions: AdminSubmission[] = items.map((item) => ({
+      ...item,
+      key: `letter:${item.id}`,
+      kind: 'letter',
+      letterRef: item.letterRef,
+      eventDate: item.eventDate,
+    }));
+    const proposalSubmissions: AdminSubmission[] = proposals.map((proposal) => ({
+      key: `proposal:${proposal.id}`,
+      id: proposal.id,
+      kind: 'proposal',
+      letterRef: null,
+      orgCode: proposal.orgCode,
+      orgShortName: proposal.orgShortName,
+      orgFullName: proposal.orgFullName,
+      presidentName: proposal.presidentName,
+      title: proposal.title,
+      eventDate: null,
+      caption: proposal.message,
+      imageUrl: null,
+      status: proposal.status,
+      feedback: proposal.feedback,
+      submittedAt: proposal.submittedAt,
+      reviewedAt: proposal.reviewedAt,
+      reviewedBy: proposal.reviewedBy,
+      proposal,
+    }));
+    return [...letterSubmissions, ...proposalSubmissions].sort(
+      (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+    );
+  }, [items, proposals]);
+
   const counts = useMemo(() => {
     return {
-      all: items.length,
-      pending: items.filter((i) => i.status === 'pending').length,
-      approved: items.filter((i) => i.status === 'approved').length,
-      rejected: items.filter((i) => i.status === 'rejected').length,
+      all: submissions.length,
+      pending: submissions.filter((item) => item.status === 'pending').length,
+      approved: submissions.filter((item) => item.status === 'approved').length,
+      rejected: submissions.filter((item) => item.status === 'rejected').length,
     };
-  }, [items]);
+  }, [submissions]);
 
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return items.filter((item) => {
+    return submissions.filter((item) => {
       if (statusFilter !== 'all' && item.status !== statusFilter) return false;
       if (!q) return true;
       return (
         item.orgShortName.toLowerCase().includes(q) ||
         item.presidentName.toLowerCase().includes(q) ||
         item.title.toLowerCase().includes(q) ||
-        item.letterRef.toLowerCase().includes(q)
+        (item.letterRef ?? item.id).toLowerCase().includes(q) ||
+        item.kind.toLowerCase().includes(q)
       );
     });
-  }, [items, statusFilter, searchQuery]);
+  }, [submissions, statusFilter, searchQuery]);
 
   const selectedItem = useMemo(
-    () => filteredItems.find((i) => i.id === selectedId) ?? filteredItems[0] ?? null,
+    () => filteredItems.find((item) => item.key === selectedId) ?? filteredItems[0] ?? null,
     [selectedId, filteredItems]
   );
 
   useEffect(() => {
+    if (!selectedItem) {
+      setSelectedId(null);
+      setFeedbackInput('');
+      return;
+    }
+    setSelectedId(selectedItem.key);
     setActionError(null);
     setFeedbackInput(selectedItem?.feedback ?? '');
-  }, [selectedItem?.id]);
+  }, [selectedItem?.key]);
 
   async function handleReview(action: 'approve' | 'reject') {
     if (!selectedItem) return;
     setActionError(null);
     if (selectedItem.status !== 'pending') {
-      setActionError('Only pending letters can be approved or rejected.');
+      setActionError('Only pending submissions can be approved or rejected.');
       return;
     }
 
     if (action === 'reject' && feedbackInput.trim().length < 4) {
-      setActionError('Please enter reviewer feedback explaining why the letter is rejected.');
+      setActionError('Please enter reviewer feedback explaining why the submission is rejected.');
       return;
     }
 
     setProcessingAction(action);
     try {
-      const res = await fetch(`/api/cessca/review/${selectedItem.id}`, {
+      const reviewUrl =
+        selectedItem.kind === 'proposal'
+          ? `/api/cessca/proposals/${encodeURIComponent(selectedItem.id)}/review`
+          : `/api/cessca/review/${encodeURIComponent(selectedItem.id)}`;
+      const res = await fetch(reviewUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -212,10 +277,19 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
       if (!res.ok) {
         throw new Error(data.error || 'Failed to update submission status.');
       }
-      const updatedItem = data.item as SubmissionQueueItem;
-      setItems((current) =>
-        current.map((item) => (item.id === updatedItem.id ? updatedItem : item))
-      );
+      if (selectedItem.kind === 'proposal') {
+        const updatedProposal = data.proposal as ProposalSubmission;
+        setProposals((current) =>
+          current.map((proposal) =>
+            proposal.id === updatedProposal.id ? updatedProposal : proposal
+          )
+        );
+      } else {
+        const updatedItem = data.item as SubmissionQueueItem;
+        setItems((current) =>
+          current.map((item) => (item.id === updatedItem.id ? updatedItem : item))
+        );
+      }
       notifyPortalDataChanged();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Review failed.');
@@ -310,6 +384,8 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
   }
 
   const selectedImgUrl = resolvePostImageUrl(selectedItem?.imageUrl);
+  const selectedProposal =
+    selectedItem?.kind === 'proposal' ? selectedItem.proposal : undefined;
 
   return (
     <main className="portal-page-enter mx-auto max-w-7xl space-y-3 px-3 py-4 sm:space-y-4 sm:px-6 sm:py-6">
@@ -329,7 +405,7 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search letter ref, org, or title..."
+            placeholder="Search submissions, organizations, or titles..."
             className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-stone-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#166534]/20 focus:border-[#166534]"
           />
         </div>
@@ -340,68 +416,11 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
           {proposalError}
         </div>
       )}
-
-      <section className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-        <div className="flex items-center justify-between border-b border-stone-200 px-4 py-3">
-          <h2 className="text-sm font-semibold text-stone-900">Proposal Files</h2>
-          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">
-            {proposals.length}
-          </span>
+      {actionError && !selectedItem && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {actionError}
         </div>
-        {proposalsLoading ? (
-          <div className="p-6 text-sm text-stone-500">Loading proposal submissions...</div>
-        ) : proposals.length === 0 ? (
-          <div className="p-6 text-center text-sm text-stone-500">No proposal files submitted.</div>
-        ) : (
-          <div className="divide-y divide-stone-100">
-            {proposals.map((proposal) => (
-              <article key={proposal.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800">
-                    {proposal.orgShortName} · {formatDate(proposal.submittedAt)}
-                  </div>
-                  <h3 className="mt-1 text-sm font-semibold text-stone-900">{proposal.title}</h3>
-                  <p className="mt-0.5 text-xs text-stone-600">
-                    {proposal.orgFullName} · Submitted by {proposal.presidentName}
-                  </p>
-                  {proposal.message && (
-                    <p className="mt-2 whitespace-pre-line text-xs leading-relaxed text-stone-700">
-                      {proposal.message}
-                    </p>
-                  )}
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-stone-600">
-                    <FileText className="h-4 w-4 text-emerald-800" />
-                    <span className="break-all font-medium text-stone-800">{proposal.fileName}</span>
-                    <span>{formatFileSize(proposal.fileSize)}</span>
-                  </div>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  {isPreviewableProposal(proposal) && (
-                    <button
-                      type="button"
-                      disabled={proposalActionId !== null}
-                      onClick={() => void handleProposalPreview(proposal)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                      {proposalActionId === proposal.id && proposalAction === 'preview' ? 'Opening...' : 'Preview'}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    disabled={proposalActionId !== null}
-                    onClick={() => void handleProposalDownload(proposal)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-900 disabled:opacity-50"
-                  >
-                    <FileDown className="h-3.5 w-3.5" />
-                    {proposalActionId === proposal.id && proposalAction === 'download' ? 'Working...' : 'Download'}
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
+      )}
 
       {/* Summary KPI Strip */}
       <div className="portal-stagger grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
@@ -424,7 +443,7 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
           </div>
         </div>
         <div className="rounded-xl border border-stone-200 bg-white p-2.5 sm:p-3">
-          <div className="text-[11px] text-stone-500 sm:text-xs">Total Letters Logged</div>
+          <div className="text-[11px] text-stone-500 sm:text-xs">Total Submissions</div>
           <div className="mt-1 font-mono text-xl font-semibold text-stone-900 tabular-nums sm:text-2xl">
             {counts.all}
           </div>
@@ -438,7 +457,7 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
             { key: 'pending', label: `Pending (${counts.pending})` },
             { key: 'approved', label: `Approved (${counts.approved})` },
             { key: 'rejected', label: `Rejected (${counts.rejected})` },
-            { key: 'all', label: `All Letters (${counts.all})` },
+            { key: 'all', label: `All Submissions (${counts.all})` },
           ] as const
         ).map((tab) => (
           <button
@@ -457,18 +476,18 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
       </div>
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-white">Letter Submissions</h2>
+        <h2 className="mb-2 text-sm font-semibold text-white">All Submissions</h2>
       </section>
 
       {/* Letter Table + Split Inspector */}
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
         <div className="lg:col-span-7 bg-white border border-stone-200 rounded-xl overflow-hidden">
-          {loading ? (
+          {loading || proposalsLoading ? (
             <div className="p-8 text-sm text-stone-500">Loading submission queue...</div>
           ) : filteredItems.length === 0 ? (
             <div className="p-10 text-center space-y-2">
               <p className="text-sm font-medium text-stone-900">
-                No letters in the {statusFilter} queue.
+                No submissions in the {statusFilter} queue.
               </p>
               <button
                 type="button"
@@ -483,25 +502,27 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-stone-200 bg-stone-50 text-[11px] uppercase tracking-wider text-stone-500">
-                    <th className="py-3 px-4 font-semibold">Ref</th>
+                    <th className="py-3 px-4 font-semibold">Type</th>
                     <th className="py-3 px-4 font-semibold">Organization</th>
-                    <th className="py-3 px-4 font-semibold">Event Title</th>
+                    <th className="py-3 px-4 font-semibold">Submission</th>
                     <th className="py-3 px-4 font-semibold">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100 text-xs">
                   {filteredItems.map((item) => {
-                    const isSelected = selectedItem?.id === item.id;
+                    const isSelected = selectedItem?.key === item.key;
                     return (
                       <tr
                         key={item.id}
-                        onClick={() => setSelectedId(item.id)}
+                        onClick={() => setSelectedId(item.key)}
                         className={`cursor-pointer transition-colors ${
                           isSelected ? 'bg-[#166534]/5' : 'hover:bg-stone-50'
                         }`}
                       >
-                        <td className="py-3 px-4 font-mono text-stone-600 tabular-nums whitespace-nowrap">
-                          {item.letterRef}
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span className="rounded-full bg-stone-100 px-2 py-1 text-[10px] font-semibold uppercase text-stone-700">
+                            {item.kind === 'proposal' ? 'Proposal File' : 'Letter'}
+                          </span>
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
                           <div className="font-semibold text-stone-900">{item.orgShortName}</div>
@@ -510,7 +531,9 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
                         <td className="py-3 px-4 max-w-[240px]">
                           <div className="font-medium text-stone-900 truncate">{item.title}</div>
                           <div className="text-[11px] text-stone-500 tabular-nums">
-                            Event: {item.eventDate}
+                            {item.kind === 'proposal'
+                              ? item.proposal?.fileName
+                              : `Event: ${item.eventDate}`}
                           </div>
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
@@ -542,18 +565,26 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
           )}
         </div>
 
-        {/* Right: Letter & Media Inspector */}
+        {/* Right: Submission Inspector */}
         <aside className="space-y-3 rounded-xl border border-stone-200 bg-white p-4 lg:col-span-5">
           {!selectedItem ? (
             <div className="py-10 text-center text-sm text-stone-500">
-              Select a submission row to inspect its media and letter details.
+              Select a submission to view its details and review status.
             </div>
           ) : (
             <>
               <div className="flex items-start justify-between gap-3 pb-3 border-b border-stone-200">
                 <div>
                   <div className="flex items-center gap-2 text-xs text-stone-500">
-                    <span className="font-mono tabular-nums">{selectedItem.letterRef}</span>
+                    <span className="font-medium uppercase">
+                      {selectedItem.kind === 'proposal' ? 'Proposal File' : 'Letter Submission'}
+                    </span>
+                    {selectedItem.letterRef && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono tabular-nums">{selectedItem.letterRef}</span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
                     <span>Submitted {formatDate(selectedItem.submittedAt)}</span>
                   </div>
@@ -582,19 +613,59 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
                     President {selectedItem.presidentName}
                   </span>
                 </div>
-                <div>
-                  <span className="text-stone-400">Scheduled Date: </span>
-                  <span className="font-medium text-stone-900 tabular-nums">
-                    {selectedItem.eventDate}
-                  </span>
+                {selectedItem.eventDate && (
+                  <div>
+                    <span className="text-stone-400">Scheduled Date: </span>
+                    <span className="font-medium text-stone-900 tabular-nums">
+                      {selectedItem.eventDate}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {(selectedItem.caption || selectedItem.kind === 'letter') && (
+                <div className="p-3.5 bg-stone-50 border border-stone-200 rounded-lg text-sm text-stone-800 leading-relaxed whitespace-pre-line">
+                  {selectedItem.caption || 'No additional details provided.'}
                 </div>
-              </div>
+              )}
 
-              <div className="p-3.5 bg-stone-50 border border-stone-200 rounded-lg text-sm text-stone-800 leading-relaxed whitespace-pre-line">
-                {selectedItem.caption}
-              </div>
+              {selectedProposal && (
+                <div className="space-y-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-stone-700">
+                    <FileText className="h-4 w-4 shrink-0 text-emerald-800" />
+                    <span className="break-all font-medium">{selectedProposal.fileName}</span>
+                    <span>{formatFileSize(selectedProposal.fileSize)}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {isPreviewableProposal(selectedProposal) && (
+                      <button
+                        type="button"
+                        disabled={proposalActionId !== null}
+                        onClick={() => void handleProposalPreview(selectedProposal)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        {proposalActionId === selectedItem.id && proposalAction === 'preview'
+                          ? 'Opening...'
+                          : 'Preview'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={proposalActionId !== null}
+                      onClick={() => void handleProposalDownload(selectedProposal)}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-900 disabled:opacity-50"
+                    >
+                      <FileDown className="h-3.5 w-3.5" />
+                      {proposalActionId === selectedItem.id && proposalAction === 'download'
+                        ? 'Working...'
+                        : 'Download'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
-              {selectedImgUrl && (
+              {selectedItem.kind === 'letter' && selectedImgUrl && (
                 <button
                   type="button"
                   onClick={() => onOpenLightbox(selectedImgUrl, selectedItem.title)}
@@ -666,7 +737,7 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
                       className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-medium text-red-800 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
                     >
                       <XCircle className="w-4 h-4" />
-                      <span>{processingAction === 'reject' ? 'Rejecting...' : 'Reject Letter'}</span>
+                      <span>{processingAction === 'reject' ? 'Rejecting...' : 'Reject Submission'}</span>
                     </button>
 
                     <button
@@ -677,7 +748,7 @@ export function CesscaAdminPage({ onSelectOrg, onOpenLogin, onOpenLightbox }: Ce
                     >
                       <CheckCircle2 className="w-4 h-4" />
                       <span>
-                        {processingAction === 'approve' ? 'Approving...' : 'Approve'}
+                        {processingAction === 'approve' ? 'Approving...' : 'Approve Submission'}
                       </span>
                     </button>
                   </>

@@ -269,6 +269,10 @@ function mapRowToProposal(row: Record<string, unknown>): ProposalSubmission {
     contentType: String(row.content_type),
     fileSize: Number(row.file_size),
     submittedAt: String(row.submitted_at),
+    status: String(row.status) as ProposalSubmission['status'],
+    feedback: row.feedback ? String(row.feedback) : null,
+    reviewedAt: row.reviewed_at ? String(row.reviewed_at) : null,
+    reviewedBy: row.reviewed_by ? String(row.reviewed_by) : null,
   };
 }
 
@@ -1135,8 +1139,9 @@ export async function createApiApp() {
         await getCentralDb().execute({
           sql: `INSERT INTO proposal_submissions (
             id, org_code, org_short_name, org_full_name, president_name, submitted_by_uid,
-            title, message, file_name, pathname, content_type, file_size, submitted_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            title, message, file_name, pathname, content_type, file_size, submitted_at,
+            status, feedback, reviewed_at, reviewed_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL)`,
           args: [
             id,
             org.code,
@@ -1175,6 +1180,10 @@ export async function createApiApp() {
           contentType: blob.contentType || 'application/octet-stream',
           fileSize: blob.size,
           submittedAt,
+          status: 'pending',
+          feedback: null,
+          reviewedAt: null,
+          reviewedBy: null,
         } satisfies ProposalSubmission,
       });
     } catch (error) {
@@ -1199,6 +1208,63 @@ export async function createApiApp() {
     } catch (error) {
       console.error('Failed to load proposal submissions:', error);
       return res.status(500).json({ error: 'Failed to load proposal files.' });
+    }
+  });
+
+  app.post('/api/cessca/proposals/:id/review', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const user = req.authUser;
+      if (!user || user.role !== 'cessca') {
+        return res.status(403).json({ error: 'CESSCA administrator privileges required.' });
+      }
+
+      const id = String(req.params.id);
+      const action = String(req.body?.action ?? '').trim().toLowerCase();
+      const feedback = String(req.body?.feedback ?? '').trim();
+      if (action !== 'approve' && action !== 'reject') {
+        return res.status(400).json({ error: 'Action must be either approve or reject.' });
+      }
+      if (action === 'reject' && feedback.length < 4) {
+        return res.status(400).json({ error: 'Please provide clear feedback when rejecting a submission.' });
+      }
+
+      const central = getCentralDb();
+      const existing = await central.execute({
+        sql: 'SELECT status FROM proposal_submissions WHERE id = ? LIMIT 1',
+        args: [id],
+      });
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: 'Proposal submission not found.' });
+      }
+      if (String(existing.rows[0].status) !== 'pending') {
+        return res.status(409).json({ error: 'This submission has already been reviewed.' });
+      }
+
+      const status = action === 'approve' ? 'approved' : 'rejected';
+      const reviewedAt = new Date().toISOString();
+      const resolvedFeedback =
+        feedback || (action === 'approve' ? 'Approved by CESSCA.' : null);
+      const update = await central.execute({
+        sql: `UPDATE proposal_submissions
+              SET status = ?, feedback = ?, reviewed_at = ?, reviewed_by = ?
+              WHERE id = ? AND status = 'pending'`,
+        args: [status, resolvedFeedback, reviewedAt, user.displayName, id],
+      });
+      if (update.rowsAffected === 0) {
+        return res.status(409).json({ error: 'This submission has already been reviewed.' });
+      }
+      await incrementPortalLiveVersion();
+
+      const updated = await central.execute({
+        sql: 'SELECT * FROM proposal_submissions WHERE id = ? LIMIT 1',
+        args: [id],
+      });
+      return res.json({
+        proposal: mapRowToProposal(updated.rows[0] as unknown as Record<string, unknown>),
+      });
+    } catch (error) {
+      console.error('Proposal review error:', error);
+      return res.status(500).json({ error: 'Failed to process proposal review.' });
     }
   });
 

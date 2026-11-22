@@ -162,6 +162,22 @@ async function initializeDatabases() {
           submitted_at TEXT NOT NULL
         )
       `);
+      const proposalColumns = await central.execute('PRAGMA table_info(proposal_submissions)');
+      const existingProposalColumns = new Set(
+        proposalColumns.rows.map((column) => String(column.name))
+      );
+      for (const [column, definition] of [
+        ['status', "TEXT NOT NULL DEFAULT 'pending'"],
+        ['feedback', 'TEXT'],
+        ['reviewed_at', 'TEXT'],
+        ['reviewed_by', 'TEXT'],
+      ]) {
+        if (!existingProposalColumns.has(column)) {
+          await central.execute(
+            `ALTER TABLE proposal_submissions ADD COLUMN ${column} ${definition}`
+          );
+        }
+      }
       await central.execute(
         'INSERT OR IGNORE INTO portal_live_version (id, version) VALUES (1, 0)'
       );

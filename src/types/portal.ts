@@ -70,6 +70,10 @@ export interface ProposalSubmission {
   contentType: string;
   fileSize: number;
   submittedAt: string;
+  status: PostStatus;
+  feedback: string | null;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
 }
 
 export interface OrgStats {
